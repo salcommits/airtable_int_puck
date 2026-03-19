@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useBase, useRecords, useCustomProperties } from '@airtable/blocks/interface/ui';
-import { Puck, Data } from '@measured/puck';
+import { Puck, Render, Data } from '@measured/puck';
 import type { Table, Field } from '@airtable/blocks/interface/models';
 import { getCustomProperties } from '../airtable/customProperties';
 import { createConfig } from '../puck/config';
@@ -24,6 +24,108 @@ export default function ExtensionRoot() {
   const records = useRecords(table || base.tables[0]);
   const record = records?.[0]; // Use first record for simplicity
 
+  // State for view mode toggle
+  const [isViewMode, setIsViewMode] = useState(false);
+
+  // Ref to track if we've modified the Publish button
+  const puckContainerRef = useRef<HTMLDivElement>(null);
+
+  // Effect to change "Publish" to "Save" in the Puck UI
+  useEffect(() => {
+    if (isViewMode) return; // Only in edit mode
+    
+    const replacePublishText = () => {
+      // Find all buttons and spans
+      const allElements = document.querySelectorAll('button, span');
+      allElements.forEach((el) => {
+        // Check if this element or its children contain "Publish"
+        if (el.textContent?.includes('Publish') && !el.textContent?.includes('Save')) {
+          // Walk through text nodes
+          const walker = document.createTreeWalker(
+            el,
+            NodeFilter.SHOW_TEXT,
+            null
+          );
+          
+          let node;
+          while ((node = walker.nextNode())) {
+            if (node.nodeValue?.includes('Publish')) {
+              node.nodeValue = node.nodeValue.replace('Publish', 'Save');
+            }
+          }
+        }
+      });
+    };
+
+    // Run immediately
+    replacePublishText();
+    
+    // Run on interval
+    const interval = setInterval(replacePublishText, 50);
+    
+    // Also use MutationObserver to catch dynamic changes
+    const observer = new MutationObserver(replacePublishText);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    return () => {
+      clearInterval(interval);
+      observer.disconnect();
+    };
+  }, [isViewMode]);
+
+  const normalizePuckData = useCallback(
+    (data: Data): Data => {
+      const safeData =
+        data && typeof data === 'object'
+          ? data
+          : ({ content: [], root: { props: {} } } as Data);
+
+      const validTypes = new Set(Object.keys(config.components || {}));
+
+      const normalizeContent = (content: unknown): any[] => {
+        if (!Array.isArray(content)) return [];
+        return content
+          .filter((item) => item && typeof item === 'object')
+          .map((item: any) => {
+            const nextItem = { ...item };
+            if (!nextItem.type || !validTypes.has(nextItem.type)) {
+              const originalType = nextItem.type;
+              nextItem.type = 'MissingComponent';
+              nextItem.props = {
+                ...(nextItem.props || {}),
+                originalType,
+              };
+            }
+
+            if ('content' in nextItem) {
+              nextItem.content = normalizeContent(nextItem.content);
+            }
+
+            if (nextItem.zones && typeof nextItem.zones === 'object') {
+              const nextZones: Record<string, any[]> = {};
+              Object.entries(nextItem.zones).forEach(([zoneId, zoneContent]) => {
+                nextZones[zoneId] = normalizeContent(zoneContent);
+              });
+              nextItem.zones = nextZones;
+            }
+
+            return nextItem;
+          });
+      };
+
+      return {
+        ...safeData,
+        content: normalizeContent((safeData as any).content),
+        root: (safeData as any).root || { props: {} },
+      } as Data;
+    },
+    [config]
+  );
+
   // State for Puck data
   const [puckData, setPuckData] = useState<Data>(() => {
     if (!record || !docField) {
@@ -31,7 +133,8 @@ export default function ExtensionRoot() {
     }
     try {
       const cellValue = record.getCellValueAsString(docField);
-      return cellValue ? JSON.parse(cellValue) : { content: [], root: { props: {} } };
+      const parsed = cellValue ? JSON.parse(cellValue) : { content: [], root: { props: {} } };
+      return normalizePuckData(parsed);
     } catch {
       return { content: [], root: { props: {} } };
     }
@@ -43,11 +146,11 @@ export default function ExtensionRoot() {
     try {
       const cellValue = record.getCellValueAsString(docField);
       const parsed = cellValue ? JSON.parse(cellValue) : { content: [], root: { props: {} } };
-      setPuckData(parsed);
+      setPuckData(normalizePuckData(parsed));
     } catch {
       setPuckData({ content: [], root: { props: {} } });
     }
-  }, [record, docField]);
+  }, [record, docField, normalizePuckData]);
 
   // Handle publish (save when clicking Publish button)
   const handlePuckPublish = useCallback(
@@ -174,9 +277,112 @@ export default function ExtensionRoot() {
 
   const bgColor = colorMap[backgroundColor] || '#f9fafb';
 
+  console.log('🔍 ExtensionRoot rendering, isViewMode:', isViewMode);
+
   return (
-    <div className="min-h-screen" style={{ backgroundColor: bgColor }}>
-      <Puck config={config} data={puckData} onPublish={handlePuckPublish} />
-    </div>
+    <>
+      {/* Toggle button - absolutely positioned at top left of viewport */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 9999999,
+          display: 'flex',
+          justifyContent: 'flex-start',
+          padding: '12px',
+          pointerEvents: 'none',
+        }}
+      >
+        <button
+          onClick={() => {
+            console.log('🔘 Button clicked! Switching mode from', isViewMode, 'to', !isViewMode);
+            setIsViewMode(!isViewMode);
+          }}
+          style={{
+            pointerEvents: 'auto',
+            padding: '8px 16px',
+            backgroundColor: '#0b70e1',
+            color: 'white',
+            border: 'none',
+            borderRadius: '6px',
+            fontSize: '14px',
+            fontWeight: '600',
+            cursor: 'pointer',
+            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
+            transition: 'background-color 0.2s ease',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#0960c7';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = '#0b70e1';
+          }}
+        >
+          {isViewMode ? '✏️ Edit Mode' : '👁️ View Mode'}
+        </button>
+      </div>
+
+      {/* Main content */}
+      <div className="min-h-screen" style={{ backgroundColor: bgColor, position: 'relative' }}>
+        {/* Add CSS to remove borders and backgrounds in view mode */}
+        {isViewMode && (
+          <style>{`
+            /* Remove all Puck component borders in view mode */
+            [data-puck-root] * {
+              border: none !important;
+              outline: none !important;
+            }
+            /* Remove dashed borders from drop zones and components */
+            .Puck-Component,
+            [class*="Component-module"],
+            [class*="DropZone"],
+            [class*="dropZone"] {
+              border: none !important;
+              outline: none !important;
+            }
+            /* Remove specific Tailwind border classes */
+            .border-2,
+            .border-dashed,
+            .border-gray-gray300,
+            .dark .border-gray-gray600 {
+              border-width: 0 !important;
+              border-style: none !important;
+              border-color: transparent !important;
+            }
+            /* Remove white backgrounds from column containers */
+            .bg-white,
+            .dark .bg-gray-gray700 {
+              background-color: transparent !important;
+            }
+            /* Remove rounded corners from containers in view mode */
+            .rounded-lg {
+              border-radius: 0 !important;
+            }
+            /* Clean up any background patterns or indicators */
+            [data-puck-root] [style*="border"] {
+              border: none !important;
+            }
+          `}</style>
+        )}
+        
+        {/* Render either editor or view mode */}
+        {isViewMode ? (
+          <Render config={config} data={puckData} />
+        ) : (
+          <div ref={puckContainerRef}>
+            <Puck 
+              config={config} 
+              data={puckData} 
+              onPublish={handlePuckPublish}
+            />
+          </div>
+        )}
+      </div>
+    </>
   );
 }

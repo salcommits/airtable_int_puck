@@ -1,18 +1,33 @@
-import type { Config } from '@measured/puck';
+import type { Config, ComponentConfig } from '@measured/puck';
 import type { Base } from '@airtable/blocks/interface/models';
 import type React from 'react';
 import Hero from './components/Hero';
 import Columns from './components/Columns';
 import Text from './components/Text';
+import Image from './components/Image';
+import { createTwoImages } from './components/TwoImages';
 import { createNumber } from './components/Number';
 
 export function createConfig(base: Base): Config {
+  const MissingComponent: ComponentConfig<{ originalType?: string }> = {
+    label: 'Missing component',
+    fields: {},
+    render: ({ originalType }) => (
+      <div className="p-4 border border-dashed border-red-300 text-sm text-red-700 bg-red-50 rounded-md">
+        Missing component: {originalType || 'Unknown'}
+      </div>
+    ),
+  };
+
   return {
     components: {
       Hero: Hero as any,
       Columns: Columns as any,
       Text: Text as any,
+      Image: Image as any,
+      TwoImages: createTwoImages(base) as any,
       Number: createNumber(base) as any,
+      MissingComponent: MissingComponent as any,
     },
     categories: {
       layout: {
@@ -20,7 +35,7 @@ export function createConfig(base: Base): Config {
         title: 'Layout',
       },
       freeform: {
-        components: ['Hero', 'Text'],
+        components: ['Hero', 'Text', 'Image', 'TwoImages'],
         title: 'Freeform Components',
       },
       dynamic: {
